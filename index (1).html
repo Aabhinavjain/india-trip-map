@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>India Trip Map — Public Viewer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  html, body { height:100%; margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; }
+  #map { height:100%; }
+  .legend { position: absolute; top:10px; left:10px; background:white; padding:8px 10px; border-radius:10px; border:1px solid #eee; box-shadow:0 4px 18px rgba(0,0,0,.1); font-size:13px; }
+  .legend .row { display:flex; gap:10px; align-items:center; }
+  .capital-label {
+    background: rgba(255,255,255,0.85);
+    padding: 1px 6px;
+    border: 1px solid #e7e7e7;
+    border-radius: 10px;
+    font-size: 11px;
+    color: #111;
+    pointer-events:none;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="legend">
+  <div class="row"><span>📍</span>Visited &nbsp; <span>✈️</span>Visited (Lite) &nbsp; <span>🏡</span>Stayed</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const map = L.map('map', { minZoom:4, maxZoom:18 }).setView([22.9734, 78.6569], 5);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap & CARTO', subdomains:'abcd', maxZoom: 20
+  }).addTo(map);
+  const bounds = L.latLngBounds([6.5, 67.5],[37.5, 97.5]); map.fitBounds(bounds); map.setMaxBounds(bounds.pad(0.2));
+
+  // Capital labels (minimal)
+  const capitals = [
+    {c:'Amaravati', lat:16.5101, lng:80.5160},{c:'Itanagar', lat:27.0844, lng:93.6053},{c:'Dispur', lat:26.1400, lng:91.7900},
+    {c:'Patna', lat:25.5941, lng:85.1376},{c:'Raipur', lat:21.2514, lng:81.6296},{c:'Panaji', lat:15.4909, lng:73.8278},
+    {c:'Gandhinagar', lat:23.2156, lng:72.6369},{c:'Chandigarh*', lat:30.7333, lng:76.7794},{c:'Shimla', lat:31.1048, lng:77.1734},
+    {c:'Ranchi', lat:23.3441, lng:85.3096},{c:'Bengaluru', lat:12.9716, lng:77.5946},{c:'Thiruvananthapuram', lat:8.5241, lng:76.9366},
+    {c:'Bhopal', lat:23.2599, lng:77.4126},{c:'Mumbai', lat:19.0760, lng:72.8777},{c:'Imphal', lat:24.8170, lng:93.9368},
+    {c:'Shillong', lat:25.5788, lng:91.8933},{c:'Aizawl', lat:23.7271, lng:92.7176},{c:'Kohima', lat:25.6751, lng:94.1086},
+    {c:'Bhubaneswar', lat:20.2961, lng:85.8245},{c:'Jaipur', lat:26.9124, lng:75.7873},{c:'Gangtok', lat:27.3389, lng:88.6065},
+    {c:'Chennai', lat:13.0827, lng:80.2707},{c:'Hyderabad', lat:17.3850, lng:78.4867},{c:'Agartala', lat:23.8315, lng:91.2868},
+    {c:'Lucknow', lat:26.8467, lng:80.9462},{c:'Dehradun', lat:30.3165, lng:78.0322},{c:'Kolkata', lat:22.5726, lng:88.3639},
+    {c:'Port Blair', lat:11.6234, lng:92.7265},{c:'Chandigarh', lat:30.7333, lng:76.7794},{c:'Daman', lat:20.3974, lng:72.8328},
+    {c:'New Delhi', lat:28.6139, lng:77.2090},{c:'Srinagar/Jammu', lat:34.0837, lng:74.7973},{c:'Leh', lat:34.1526, lng:77.5771},
+    {c:'Kavaratti', lat:10.5667, lng:72.6167},{c:'Puducherry', lat:11.9139, lng:79.8145}
+  ];
+  capitals.forEach(k => {
+    L.marker([k.lat, k.lng], {
+      icon: L.divIcon({ className:'capital-label', html:k.c, iconSize:[10,10], iconAnchor:[5,5] }),
+      interactive:false
+    }).addTo(map);
+  });
+
+  // State shading cache
+  const stateShadeCache = new Map();
+
+  // Load public data file (read-only)
+  async function loadPlaces() {
+    const res = await fetch('data/places.json', { cache: 'no-store' });
+    const arr = await res.json();
+    return Array.isArray(arr) ? arr : [];
+  }
+
+  function emoji(status){
+    if(status==='visited') return '📍';
+    if(status==='lite') return '✈️';
+    if(status==='stayed') return '🏡';
+    return '📍';
+  }
+
+  async function fetchStatePolygon(stateName){
+    const url = new URL('https://nominatim.openstreetmap.org/search');
+    url.searchParams.set('q', `${stateName}, India`);
+    url.searchParams.set('countrycodes','in');
+    url.searchParams.set('format','json');
+    url.searchParams.set('limit','1');
+    url.searchParams.set('polygon_geojson','1');
+    const res = await fetch(url, { headers: { 'User-Agent':'India-Trip-Map/1.0' } });
+    const arr = await res.json();
+    return arr && arr[0] && arr[0].geojson ? arr[0].geojson : null;
+  }
+
+  async function shadeState(stateName){
+    if(!stateName || stateShadeCache.has(stateName)) return;
+    const gj = await fetchStatePolygon(stateName);
+    if(!gj) return;
+    const layer = L.geoJSON(gj, { style: { color:'#f8bbd0', weight:1, fillColor:'#fde4ef', fillOpacity:0.32 } }).addTo(map);
+    stateShadeCache.set(stateName, layer);
+  }
+
+  (async function init(){
+    const places = await loadPlaces();
+    const group = L.layerGroup().addTo(map);
+    for(const p of places){
+      // marker
+      L.marker([p.lat, p.lng], {
+        icon: L.divIcon({ className:'', html:`<div style="font-size:22px">${emoji(p.status)}</div>`, iconSize:[22,22], iconAnchor:[11,11] })
+      }).addTo(group).bindPopup(`<b>${p.name||'Place'}</b><br>${p.status==='visited'?'Visited 📍':p.status==='lite'?'Visited (Lite) ✈️':'Stayed 🏡'}`);
+
+      // shade state (expects p.state in JSON; if missing, skip to keep viewer read-only)
+      if (p.state) { await shadeState(p.state); }
+    }
+  })();
+</script>
+</body>
+</html>
