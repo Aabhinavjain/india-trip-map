@@ -58,22 +58,8 @@
     }).addTo(map);
   });
 
-  // State shading cache
+  // --- State shading helpers ---
   const stateShadeCache = new Map();
-
-  // Load public data file (read-only)
-  async function loadPlaces() {
-    const res = await fetch('data/places.json', { cache: 'no-store' });
-    const arr = await res.json();
-    return Array.isArray(arr) ? arr : [];
-  }
-
-  function emoji(status){
-    if(status==='visited') return '📍';
-    if(status==='lite') return '✈️';
-    if(status==='stayed') return '🏡';
-    return '📍';
-  }
 
   async function fetchStatePolygon(stateName){
     const url = new URL('https://nominatim.openstreetmap.org/search');
@@ -82,7 +68,7 @@
     url.searchParams.set('format','json');
     url.searchParams.set('limit','1');
     url.searchParams.set('polygon_geojson','1');
-    const res = await fetch(url, { headers: { 'User-Agent':'India-Trip-Map/1.0' } });
+    const res = await fetch(url);
     const arr = await res.json();
     return arr && arr[0] && arr[0].geojson ? arr[0].geojson : null;
   }
@@ -95,17 +81,51 @@
     stateShadeCache.set(stateName, layer);
   }
 
+  async function reverseState(lat,lng){
+    const url = new URL('https://nominatim.openstreetmap.org/reverse');
+    url.searchParams.set('lat', lat); url.searchParams.set('lon', lng);
+    url.searchParams.set('format','json'); url.searchParams.set('zoom','10'); url.searchParams.set('addressdetails','1');
+    const res = await fetch(url);
+    const data = await res.json();
+    return data?.address?.state || null;
+  }
+
+  // --- Load places.json and render ---
+  function emoji(status){
+    if(status==='visited') return '📍';
+    if(status==='lite') return '✈️';
+    if(status==='stayed') return '🏡';
+    return '📍';
+  }
+
+  async function loadPlaces() {
+    const res = await fetch('data/places.json', { cache: 'no-store' });
+    const arr = await res.json();
+    return Array.isArray(arr) ? arr : [];
+  }
+
   (async function init(){
     const places = await loadPlaces();
     const group = L.layerGroup().addTo(map);
+
+    // Shade unique states (compute missing ones via reverse geocode)
+    const uniqueStates = new Set();
+    for (const p of places) {
+      if (p.state) uniqueStates.add(p.state);
+      else {
+        try {
+          const s = await reverseState(p.lat, p.lng);
+          if (s) uniqueStates.add(s);
+        } catch {}
+      }
+    }
+    for (const s of uniqueStates) await shadeState(s);
+
+    // markers
     for(const p of places){
-      // marker
       L.marker([p.lat, p.lng], {
         icon: L.divIcon({ className:'', html:`<div style="font-size:22px">${emoji(p.status)}</div>`, iconSize:[22,22], iconAnchor:[11,11] })
       }).addTo(group).bindPopup(`<b>${p.name||'Place'}</b><br>${p.status==='visited'?'Visited 📍':p.status==='lite'?'Visited (Lite) ✈️':'Stayed 🏡'}`);
-
-      // shade state (expects p.state in JSON; if missing, skip to keep viewer read-only)
-      if (p.state) { await shadeState(p.state); }
     }
   })();
 </script>
